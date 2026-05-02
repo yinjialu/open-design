@@ -863,7 +863,7 @@ test('design files can be deleted from the design files browser and stay deleted
     const popoverOpen = await desktop.eval<boolean>(`Boolean(document.querySelector('[data-testid="design-file-menu-popover"]'))`);
     assert.equal(popoverOpen, true);
   });
-  await clickByTestId(`design-file-delete-${fileName}`);
+  await clickPopoverButton('Delete');
 
   await waitFor(async () => {
     const exists = await readDesignFileExists(projectId, fileName);
@@ -1276,6 +1276,21 @@ async function clickByTestId(testId: string): Promise<void> {
     })()
   `);
   assert.equal(clicked, true, `Expected to click test id: ${testId}`);
+}
+
+async function clickPopoverButton(label: string): Promise<void> {
+  const clicked = await desktop.eval(`
+    (() => {
+      const popover = document.querySelector('[data-testid="design-file-menu-popover"]');
+      if (!popover) return false;
+      const button = Array.from(popover.querySelectorAll('button'))
+        .find((entry) => entry.textContent?.trim() === ${JSON.stringify(label)});
+      if (!(button instanceof HTMLElement)) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  assert.equal(clicked, true, `Expected to click popover button: ${label}`);
 }
 
 async function clickAvatarMenuItem(label: string): Promise<void> {

@@ -92,6 +92,17 @@ export function createDesktopHarness(name: string) {
       });
     },
     async openSettings() {
+      await waitFor(async () => {
+        const ready = await this.eval<boolean>(`
+          (() => Boolean(
+            document.querySelector('[role="dialog"]') ||
+            document.querySelector('button.foot-pill') ||
+            document.querySelector('.settings-icon-btn')
+          ))()
+        `);
+        assert.equal(ready, true);
+      });
+
       const clicked = await this.eval(`
         (() => {
           if (document.querySelector('[role="dialog"]')) return true;
