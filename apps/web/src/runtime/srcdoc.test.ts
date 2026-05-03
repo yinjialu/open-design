@@ -111,6 +111,32 @@ describe('buildSrcdoc', () => {
     expect(srcdoc).not.toContain('data-od-selection-bridge');
   });
 
+  // Regression for nexu-io/open-design#362: the bridge must accept an
+  // od:inspect-replay message that replaces its in-memory override map
+  // with the host's authoritative set. Without this, toggling Inspect
+  // off/on or switching to Comment mode reloads the iframe from
+  // previewSource without the host's unsaved style block, leaving
+  // preview and persisted state out of sync — saveInspectToSource()
+  // could then commit CSS the user is no longer seeing.
+  it('accepts od:inspect-replay to rehydrate from the host map after a srcdoc rebuild', () => {
+    const srcdoc = buildSrcdoc('<main data-od-id="hero">Hero</main>', {
+      inspectBridge: true,
+    });
+    expect(srcdoc).toContain("data.type === 'od:inspect-replay'");
+    // Re-validates the inbound payload under the same allow-list and
+    // value sanitizer used for od:inspect-set. A parent able to post to
+    // this bridge is otherwise trusted, but applying its payload through
+    // the bridge's own contract keeps the override sheet under known
+    // rules instead of whatever the parent sent.
+    expect(srcdoc).toContain('Object.prototype.hasOwnProperty.call(ALLOWED_PROPS, name)');
+    // The replay handler installs the host map atomically — clears the
+    // previous in-memory map first, then re-applies validated entries
+    // and rebuilds the sheet in a single pass so the user does not see
+    // a flash of unstyled preview between the two postMessages a
+    // per-prop replay would require.
+    expect(srcdoc).toContain('overrides = Object.create(null);');
+  });
+
   it('hardens inspect overrides with a prop allow-list, value sanitizer, and trusted selector', () => {
     const srcdoc = buildSrcdoc('<main data-od-id="hero">Hero</main>', {
       inspectBridge: true,

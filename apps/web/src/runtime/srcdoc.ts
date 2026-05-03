@@ -120,18 +120,26 @@ function injectSandboxShim(doc: string): string {
 // the difference is what the host does with the selection — annotate
 // (Comment) or live-tune basic styles (Inspect).
 //
-// Inspect adds three messages on top of the comment protocol:
+// Inspect adds four messages on top of the comment protocol:
 //   in:  { type: 'od:inspect-set', elementId, selector, prop, value }
 //        Apply (or unset, when value === '') a per-element CSS override.
 //   in:  { type: 'od:inspect-reset', elementId? } Clear overrides for one
 //        element, or all if elementId is omitted.
 //   in:  { type: 'od:inspect-extract' } Reply with the cumulative
 //        override map so the host can persist to source.
+//   in:  { type: 'od:inspect-replay', overrides } Replace the in-memory
+//        override map with the host's authoritative set so the iframe
+//        preview matches host state after every srcdoc rebuild. Without
+//        this the bridge re-hydrates only the persisted <style> block on
+//        load, so any unsaved edit the host still holds disappears from
+//        the preview while saveInspectToSource() can later commit CSS the
+//        user is no longer seeing. Re-validates every entry under the
+//        same allow-list / value sanitizer applied to od:inspect-set.
 //   out: { type: 'od:inspect-overrides', overrides } The current snapshot,
-//        sent in reply to extract and after every set/reset. The host
-//        re-derives the persisted CSS body from the structured map under
-//        its own allow-list — the bridge's own stylesheet text is NOT
-//        included in this message because artifact JS can forge a
+//        sent in reply to extract and after every set/reset/replay. The
+//        host re-derives the persisted CSS body from the structured map
+//        under its own allow-list — the bridge's own stylesheet text is
+//        NOT included in this message because artifact JS can forge a
 //        same-source od:inspect-overrides containing a hostile `css`.
 //
 // Overrides are written into a single <style data-od-inspect-overrides>
@@ -412,6 +420,41 @@ function injectSelectionBridge(
       return;
     }
     if (data.type === 'od:inspect-extract') {
+      postOverrides();
+      return;
+    }
+    if (data.type === 'od:inspect-replay') {
+      // Replace the in-memory map with the host's authoritative set so
+      // unsaved edits survive a srcdoc rebuild (toggling inspect off/on,
+      // switching to comment, any other reload reloads the iframe from
+      // previewSource without the unsaved style block). Re-validate every
+      // entry: a parent able to postMessage to this bridge is otherwise
+      // trusted, but applying its payload through the same allow-list /
+      // value sanitizer keeps the override sheet under the bridge's own
+      // contract instead of whatever the parent sent.
+      var raw = (data && typeof data.overrides === 'object' && data.overrides) ? data.overrides : {};
+      overrides = Object.create(null);
+      var ids = Object.keys(raw);
+      for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var entry = raw[id];
+        if (!entry || typeof entry.props !== 'object' || !entry.props) continue;
+        var safeSelector = safeSelectorFor(id, entry.selector);
+        if (!safeSelector) continue;
+        var clean = Object.create(null);
+        var pkeys = Object.keys(entry.props);
+        for (var p = 0; p < pkeys.length; p++) {
+          var name = String(pkeys[p]).toLowerCase();
+          if (!Object.prototype.hasOwnProperty.call(ALLOWED_PROPS, name)) continue;
+          var rawValue = entry.props[pkeys[p]];
+          if (rawValue == null) continue;
+          var v = String(rawValue).trim();
+          if (!v || UNSAFE_VALUE.test(v)) continue;
+          clean[name] = v;
+        }
+        if (Object.keys(clean).length) overrides[id] = { selector: safeSelector, props: clean };
+      }
+      rebuildStyleSheet();
       postOverrides();
       return;
     }

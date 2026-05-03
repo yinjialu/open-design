@@ -163,6 +163,94 @@ describe('applyInspectOverridesToSource', () => {
     const cleared = applyInspectOverridesToSource(dup, '');
     expect(cleared).not.toContain('data-od-inspect-overrides');
   });
+
+  // Regression for nexu-io/open-design#362: the splicer must be HTML-aware
+  // when locating its own override block and the head insertion point.
+  // Generated artifacts commonly carry inline scripts/styles that mention
+  // `</head>` or `<style data-od-inspect-overrides>` as text, e.g. a
+  // template literal that builds HTML at runtime or a CSS rule that
+  // documents the override block. A regex-only splicer would happily
+  // splice into the middle of the script body or strip the literal string,
+  // corrupting user code on Save to source.
+  it('ignores </head> literals inside inline <script> and <style>', () => {
+    const sourceWithLiteral =
+      `<!doctype html><html><head>` +
+      // Script body contains a quoted "</head>" string that must NOT be
+      // treated as the real head close.
+      `<script>const tpl = "<head>\\n</head>";</script>` +
+      `<style>/* sentinel: </head> appears in this CSS comment */</style>` +
+      `<title>X</title></head><body><main data-od-id="hero">Hi</main></body></html>`;
+    const next = applyInspectOverridesToSource(sourceWithLiteral, css);
+    // The override block must land exactly once, before the real </head>,
+    // and after the inline <script> and <style> that contain `</head>`
+    // text. Without HTML-aware scanning the regex would splice before the
+    // first textual `</head>`, which sits inside the script body.
+    const blockIdx = next.indexOf('<style data-od-inspect-overrides>');
+    const realHeadEndIdx = next.indexOf('</head>', next.indexOf('<title>'));
+    const scriptOpenIdx = next.indexOf('<script>');
+    const scriptCloseIdx = next.indexOf('</script>');
+    expect(blockIdx).toBeGreaterThan(-1);
+    expect(realHeadEndIdx).toBeGreaterThan(-1);
+    expect(scriptOpenIdx).toBeGreaterThan(-1);
+    expect(scriptCloseIdx).toBeGreaterThan(-1);
+    // Override block sits BEFORE the real </head>, AFTER the script body.
+    expect(blockIdx).toBeLessThan(realHeadEndIdx);
+    expect(blockIdx).toBeGreaterThan(scriptCloseIdx);
+    // The script's `</head>` literal still survives in the output —
+    // the splicer must not have hijacked it as the head insertion point.
+    expect(next).toContain('const tpl = "<head>\\n</head>";');
+    // The CSS comment's `</head>` token also survives untouched.
+    expect(next).toContain('/* sentinel: </head> appears in this CSS comment */');
+    // Only one override block in total.
+    const blockMatches = next.match(/<style data-od-inspect-overrides>/g) ?? [];
+    expect(blockMatches).toHaveLength(1);
+  });
+
+  it('ignores `<style data-od-inspect-overrides>` literals inside <script>', () => {
+    // A sentinel string literal in an inline script that mentions the
+    // override block by name. A regex-only splicer would strip the
+    // literal as if it were a real block, mangling the script.
+    const sourceWithLiteral =
+      `<!doctype html><html><head>` +
+      `<script>const banner = "<style data-od-inspect-overrides>color: red</style>";</script>` +
+      `<title>X</title></head><body><main data-od-id="hero">Hi</main></body></html>`;
+    const next = applyInspectOverridesToSource(sourceWithLiteral, css);
+    // The literal must survive verbatim inside the script body.
+    expect(next).toContain('const banner = "<style data-od-inspect-overrides>color: red</style>";');
+    // The output still gains exactly one real override block.
+    const blockMatches = next.match(/<style data-od-inspect-overrides>\n\[data-od-id="hero"\]/g) ?? [];
+    expect(blockMatches).toHaveLength(1);
+    // Stripping with empty css must NOT touch the script literal.
+    const stripped = applyInspectOverridesToSource(sourceWithLiteral, '');
+    expect(stripped).toContain('const banner = "<style data-od-inspect-overrides>color: red</style>";');
+    // The script-internal literal is the only mention of the marker after
+    // stripping — the splicer must not have inserted or kept any real
+    // override block.
+    const allMatches = stripped.match(/data-od-inspect-overrides/g) ?? [];
+    expect(allMatches).toHaveLength(1);
+  });
+
+  it('ignores </head> inside <textarea> and <title> raw-text elements', () => {
+    // <textarea> and <title> are escapable raw-text elements; their
+    // contents are text, not markup, so a literal `</head>` inside them
+    // must not be treated as a tag boundary.
+    const sourceWithTextarea =
+      `<!doctype html><html><head><title>Has </head> in title</title></head>` +
+      `<body><textarea>literal </head> goes here</textarea>` +
+      `<main data-od-id="hero">Hi</main></body></html>`;
+    const next = applyInspectOverridesToSource(sourceWithTextarea, css);
+    // Override block lands before the REAL </head>, which is after the
+    // </title>'s close. The title-internal `</head>` must not be the
+    // chosen insertion point.
+    const blockIdx = next.indexOf('<style data-od-inspect-overrides>');
+    const titleCloseIdx = next.indexOf('</title>');
+    const realHeadCloseIdx = next.indexOf('</head>', titleCloseIdx);
+    expect(blockIdx).toBeGreaterThan(titleCloseIdx);
+    expect(blockIdx).toBeLessThan(realHeadCloseIdx);
+    // Both literals survive untouched.
+    expect(next).toContain('Has </head> in title');
+    expect(next).toContain('literal </head> goes here');
+  });
 });
 
 describe('serializeInspectOverrides', () => {

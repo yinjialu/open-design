@@ -678,30 +678,172 @@ export function parseInspectOverridesFromSource(source: string): InspectOverride
   return map;
 }
 
+// HTML5 raw-text and escapable-raw-text elements: the parser does not
+// interpret markup inside their contents, so a literal `</head>` or
+// `<style data-od-inspect-overrides>` written as text inside one of them
+// must NOT be treated as a real tag. Without this exclusion, a regex-only
+// splicer can match `</head>` inside an inline <script> string literal or
+// a CSS comment and inject the override block into the middle of
+// JavaScript/CSS instead of the actual document head, corrupting the
+// artifact on Save to source.
+const RAW_TEXT_INSPECT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
+
+// Find the start (`<` position) of the matching close tag for a raw-text
+// element, scanning case-insensitively. The close tag must be followed by
+// a tag-name boundary (whitespace, `/`, or `>`) so a longer name like
+// `</scripted>` doesn't accidentally close a `<script>`.
+function findInspectRawTextEnd(source: string, start: number, name: string): number {
+  const lower = source.toLowerCase();
+  const needle = '</' + name.toLowerCase();
+  let p = start;
+  while (p < source.length) {
+    const idx = lower.indexOf(needle, p);
+    if (idx < 0) return -1;
+    const after = source.charAt(idx + needle.length);
+    if (after === '' || after === '>' || after === '/' || /\s/.test(after)) return idx;
+    p = idx + needle.length;
+  }
+  return -1;
+}
+
+type InspectSpliceScan = {
+  out: string;
+  // Position in `out` immediately after the first top-level `<head ...>`
+  // open tag, or -1 if no head was found outside raw-text content.
+  headOpenEnd: number;
+  // Position in `out` at the first top-level `</head>` close tag, or -1.
+  headCloseStart: number;
+};
+
+// Walk `source` and produce a copy with every existing
+// `<style data-od-inspect-overrides>...</style>` block removed, while
+// remembering where the real (non-raw-text) `<head>` boundaries land in
+// the output. The walker honours HTML comment, doctype/processing
+// instruction, and raw-text element boundaries so the splicer can ignore
+// tag-shaped literals inside scripts/styles/textareas/titles. Pure string
+// transform — no DOM dependency, safe to run during SSR/tests.
+function stripInspectOverridesAndIndex(source: string): InspectSpliceScan {
+  const parts: string[] = [];
+  let outLen = 0;
+  let headOpenEnd = -1;
+  let headCloseStart = -1;
+  let i = 0;
+  function emit(text: string): void {
+    if (!text) return;
+    parts.push(text);
+    outLen += text.length;
+  }
+  while (i < source.length) {
+    const lt = source.indexOf('<', i);
+    if (lt < 0) {
+      emit(source.slice(i));
+      break;
+    }
+    if (lt > i) emit(source.slice(i, lt));
+    i = lt;
+    if (source.startsWith('<!--', i)) {
+      const end = source.indexOf('-->', i + 4);
+      const stop = end < 0 ? source.length : end + 3;
+      emit(source.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    if (source.startsWith('<!', i) || source.startsWith('<?', i)) {
+      const end = source.indexOf('>', i + 2);
+      const stop = end < 0 ? source.length : end + 1;
+      emit(source.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    const tagEnd = source.indexOf('>', i + 1);
+    if (tagEnd < 0) {
+      emit(source.slice(i));
+      break;
+    }
+    const tagText = source.slice(i, tagEnd + 1);
+    const closeMatch = /^<\/([a-zA-Z][a-zA-Z0-9-]*)/.exec(tagText);
+    if (closeMatch) {
+      const name = closeMatch[1]!.toLowerCase();
+      if (name === 'head' && headCloseStart < 0) headCloseStart = outLen;
+      emit(tagText);
+      i = tagEnd + 1;
+      continue;
+    }
+    const openMatch = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(tagText);
+    if (!openMatch) {
+      emit(tagText);
+      i = tagEnd + 1;
+      continue;
+    }
+    const name = openMatch[1]!.toLowerCase();
+    const isSelfClose = /\/\s*>$/.test(tagText);
+    if (name === 'head' && headOpenEnd < 0) headOpenEnd = outLen + tagText.length;
+    if (name === 'style' && /\bdata-od-inspect-overrides\b/i.test(tagText)) {
+      // Strip the entire override block. A self-closing <style /> is a
+      // degenerate authoring case; treat it as nothing to skip past.
+      if (isSelfClose) {
+        i = tagEnd + 1;
+        continue;
+      }
+      const closeStart = findInspectRawTextEnd(source, tagEnd + 1, 'style');
+      if (closeStart < 0) {
+        // Unterminated override block — drop the rest of the document
+        // rather than silently reflowing later content into a dangling
+        // <style>. Matches the "stop" behaviour of the previous regex.
+        i = source.length;
+        continue;
+      }
+      const closeEnd = source.indexOf('>', closeStart);
+      let stop = closeEnd < 0 ? source.length : closeEnd + 1;
+      while (stop < source.length && /\s/.test(source.charAt(stop))) stop++;
+      i = stop;
+      continue;
+    }
+    if (!isSelfClose && RAW_TEXT_INSPECT_ELEMENTS.has(name)) {
+      const closeStart = findInspectRawTextEnd(source, tagEnd + 1, name);
+      if (closeStart < 0) {
+        emit(source.slice(i));
+        i = source.length;
+        continue;
+      }
+      const closeEnd = source.indexOf('>', closeStart);
+      const stop = closeEnd < 0 ? source.length : closeEnd + 1;
+      // Copy the entire raw-text element (open tag, body, close tag) to
+      // the output verbatim so its contents pass through unmodified.
+      emit(source.slice(i, stop));
+      i = stop;
+      continue;
+    }
+    emit(tagText);
+    i = tagEnd + 1;
+  }
+  return { out: parts.join(''), headOpenEnd, headCloseStart };
+}
+
 // Splice (or remove) the inspect overrides <style> block in an HTML
 // document. Idempotent: calling with the same css produces the same
 // document. Empty css strips the block entirely.
+//
+// HTML-aware: the underlying scan ignores comments and raw-text element
+// contents (script / style / textarea / title), so a literal `</head>` or
+// `<style data-od-inspect-overrides>` written inside an inline script or
+// style block does not trick the splicer into stripping user code or
+// inserting the override block in the middle of JavaScript/CSS.
 //
 // Exported (via the module) so a unit test can drive it without a live
 // browser. Pure string transform — no DOM, no parser dependency.
 export function applyInspectOverridesToSource(source: string, css: string): string {
   const trimmed = css.trim();
-  // Global flag so we strip every existing inspect override block, not just
-  // the first one. Without it, a source that ever accumulated duplicate
-  // <style data-od-inspect-overrides> blocks (manual edit, or an earlier
-  // buggy save) would leave stale rules behind on save and reload-after-save
-  // could re-apply an override the UI just cleared.
-  const styleRegex = /<style[^>]*data-od-inspect-overrides[^>]*>[\s\S]*?<\/style>\s*/gi;
-  const stripped = source.replace(styleRegex, '');
-  if (!trimmed) return stripped;
+  const { out, headOpenEnd, headCloseStart } = stripInspectOverridesAndIndex(source);
+  if (!trimmed) return out;
   const block = `<style data-od-inspect-overrides>\n${trimmed}\n</style>\n`;
-  if (/<\/head>/i.test(stripped)) {
-    return stripped.replace(/<\/head>/i, `${block}</head>`);
+  if (headCloseStart >= 0) {
+    return out.slice(0, headCloseStart) + block + out.slice(headCloseStart);
   }
-  if (/<head[^>]*>/i.test(stripped)) {
-    return stripped.replace(/<head[^>]*>/i, (m) => `${m}${block}`);
+  if (headOpenEnd >= 0) {
+    return out.slice(0, headOpenEnd) + block + out.slice(headOpenEnd);
   }
-  return block + stripped;
+  return block + out;
 }
 
 function CommentPreviewOverlays({
@@ -1398,6 +1540,23 @@ function HtmlViewer({
     win.postMessage({ type: 'od:inspect-reset', elementId }, '*');
   }
 
+  // Replay the host's authoritative override map into the freshly loaded
+  // iframe. The bridge inside the iframe only sees rules persisted in the
+  // artifact source via its own hydrateOverridesFromDom() — any unsaved
+  // edit lives on the host side until Save-to-source. Without this replay,
+  // toggling Inspect off/on, switching to Comment mode, or any other
+  // srcdoc rebuild reloads the iframe from previewSource without the
+  // unsaved style block, so the preview drops the live edits while
+  // saveInspectToSource() can still persist them later from the stale
+  // host map. The bridge re-validates each entry under its own allow-list,
+  // so a parent that posted a hostile replay can only land overrides the
+  // bridge would also have accepted via od:inspect-set.
+  function replayInspectOverridesToIframe() {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ type: 'od:inspect-replay', overrides: inspectOverrides }, '*');
+  }
+
   // Persist accumulated inspect overrides into the artifact source: replace
   // (or insert) a single <style data-od-inspect-overrides> block in <head>.
   // The CSS body is serialized from the host's own override map, hydrated
@@ -2059,6 +2218,7 @@ function HtmlViewer({
                 title={file.name}
                 sandbox="allow-scripts"
                 srcDoc={srcDoc}
+                onLoad={replayInspectOverridesToIframe}
               />
             </div>
             {commentMode ? (
