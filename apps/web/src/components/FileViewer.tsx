@@ -236,6 +236,11 @@ function CommentPopover({
 // input value. Browsers return colors as rgb()/rgba(); HTML <input type=color>
 // only accepts "#rrggbb". Lengths come back as "12px" or "0px"; we strip
 // units for slider binding and re-append on emit.
+//
+// Note: <input type=color> has no alpha channel, so an rgba() with alpha < 1
+// is collapsed to its opaque RGB equivalent here. Most agent-generated HTML
+// uses opaque colors, so this is a known cosmetic limitation — a
+// semi-transparent source value will display in the panel as fully opaque.
 function rgbToHex(value: string | undefined): string {
   if (!value) return '#000000';
   const v = value.trim();
@@ -257,9 +262,15 @@ function rgbToHex(value: string | undefined): string {
   return '#' + toHex(m[1] ?? '0') + toHex(m[2] ?? '0') + toHex(m[3] ?? '0');
 }
 
+// Parse a CSS length to a number. Inspect's current sliders all clamp to a
+// non-negative range (padding, font-size, border-radius), so we reject
+// negatives at parse time too — otherwise a `-12px` source value would be
+// silently floored to 0 by the slider clamp without the regex agreeing.
+// If a future control needs negative values (e.g. margin), thread an
+// explicit `allowNegative` flag rather than reintroducing `-?` here.
 function pxToNumber(value: string | undefined): number {
   if (!value) return 0;
-  const m = value.trim().match(/^(-?\d+(?:\.\d+)?)/);
+  const m = value.trim().match(/^(\d+(?:\.\d+)?)/);
   return m ? Number(m[1]) : 0;
 }
 
@@ -302,9 +313,11 @@ function InspectPanel({
     onApply(prop, raw);
   }
 
-  // Padding is a single shared slider that fans out to the four sides.
-  // Most authors want symmetric padding; an "advanced" toggle could surface
-  // per-side controls later.
+  // Padding is exposed as a single shared slider that emits the `padding`
+  // shorthand; the browser fans the value out to all four sides internally.
+  // When per-side control becomes useful, switch to emitting explicit
+  // padding-top / padding-right / padding-bottom / padding-left props
+  // (the bridge already allow-lists those long-hand names).
   const initialPadding = pxToNumber(target.style.paddingTop);
   const initialFontSize = pxToNumber(target.style.fontSize);
   const initialRadius = pxToNumber(target.style.borderRadius);
@@ -1203,7 +1216,12 @@ function HtmlViewer({
       setInspectSavedAt(Date.now());
       setReloadKey((k) => k + 1);
     } catch (err) {
-      setInspectError(err instanceof Error ? err.message : 'Save failed');
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setInspectError(msg);
+      // The error banner inside the inspect panel is easy to miss when the
+      // user is focused on the iframe preview — surface failures in the
+      // console as well so quota/network errors aren't silently lost.
+      console.error('[inspect] saveToSource failed:', err);
     } finally {
       setSavingInspect(false);
     }

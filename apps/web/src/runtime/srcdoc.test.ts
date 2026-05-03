@@ -76,4 +76,29 @@ describe('buildSrcdoc', () => {
     const srcdoc = buildSrcdoc('<main data-od-id="hero">Hero</main>', {});
     expect(srcdoc).not.toContain('data-od-selection-bridge');
   });
+
+  it('hardens inspect overrides with a prop allow-list, value sanitizer, and trusted selector', () => {
+    const srcdoc = buildSrcdoc('<main data-od-id="hero">Hero</main>', {
+      inspectBridge: true,
+    });
+
+    // Allow-list rejects anything off the InspectPanel surface — without
+    // this a malicious parent could smuggle CSS via od:inspect-set.
+    expect(srcdoc).toContain('var ALLOWED_PROPS');
+    expect(srcdoc).toContain("'color': true");
+    expect(srcdoc).toContain("'background-color': true");
+    expect(srcdoc).toContain("'border-radius': true");
+    expect(srcdoc).toContain("Object.prototype.hasOwnProperty.call(ALLOWED_PROPS, prop)");
+
+    // Value sanitizer drops any character that could close the declaration,
+    // the rule, or the <style> element.
+    expect(srcdoc).toContain('var UNSAFE_VALUE = /[;{}<>\\n\\r]/;');
+    expect(srcdoc).toContain('UNSAFE_VALUE.test(v)');
+
+    // Selector is recomputed from elementId, not echoed back from the
+    // inbound message — defends against a forged selector breaking out
+    // of the override <style> block.
+    expect(srcdoc).toContain('function safeSelectorFor(elementId)');
+    expect(srcdoc).toContain('var safeSelector = safeSelectorFor(elementId)');
+  });
 });

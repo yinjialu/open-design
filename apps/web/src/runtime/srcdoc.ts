@@ -126,6 +126,14 @@ function injectSandboxShim(doc: string): string {
 // Overrides are written into a single <style data-od-inspect-overrides>
 // block in <head>, with `!important` on every property so the bridge
 // can defeat author inline styles (common in agent-generated HTML).
+//
+// Security: this bridge runs inside a sandboxed iframe but still shares the
+// host page context for the override <style> element. The message listener
+// does NOT validate ev.origin — the web app runs on configurable ports and
+// preview domains, so the host origin is not stable. The bridge therefore
+// trusts any parent that can postMessage to it and relies on iframe
+// sandboxing + the prop allow-list / value sanitization below to contain
+// damage. Any parent able to postMessage here can already mount the iframe.
 function injectSelectionBridge(doc: string): string {
   const script = `<script data-od-selection-bridge>(function(){
   var commentEnabled = false;
@@ -134,8 +142,44 @@ function injectSelectionBridge(doc: string): string {
   // overrides[elementId] = { selector: '[data-od-id="x"]', props: { color: '#fff', ... } }
   var overrides = Object.create(null);
   var styleEl = null;
+  // Allow-list of CSS properties the host may override. A malicious parent
+  // could otherwise smuggle arbitrary CSS (or, with </style>, raw HTML)
+  // through od:inspect-set. Keep this in sync with the InspectPanel UI.
+  var ALLOWED_PROPS = {
+    'color': true,
+    'background-color': true,
+    'font-size': true,
+    'font-weight': true,
+    'font-family': true,
+    'line-height': true,
+    'text-align': true,
+    'padding': true,
+    'padding-top': true,
+    'padding-right': true,
+    'padding-bottom': true,
+    'padding-left': true,
+    'border-radius': true
+  };
+  // Reject any value that could break out of a 'prop: value' declaration:
+  // semicolons (extra declarations), braces (close the rule), angle
+  // brackets (close the <style> tag), and newlines (defense in depth).
+  var UNSAFE_VALUE = /[;{}<>\\n\\r]/;
   function active(){ return commentEnabled || inspectEnabled; }
   function esc(value){ try { return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/"/g, '\\\\"'); } catch (_) { return String(value); } }
+  // Recompute the selector from elementId rather than trusting the one in
+  // the inbound message — a forged selector like
+  // '} </style><script>...' would otherwise be concatenated into the
+  // override <style> sheet verbatim.
+  function safeSelectorFor(elementId){
+    var id = String(elementId);
+    if (document.querySelector('[data-od-id="' + esc(id) + '"]')) {
+      return '[data-od-id="' + esc(id) + '"]';
+    }
+    if (document.querySelector('[data-screen-label="' + esc(id) + '"]')) {
+      return '[data-screen-label="' + esc(id) + '"]';
+    }
+    return null;
+  }
   function ensureStyleEl(){
     if (styleEl && styleEl.isConnected) return styleEl;
     styleEl = document.querySelector('style[data-od-inspect-overrides]');
@@ -246,15 +290,19 @@ function injectSelectionBridge(doc: string): string {
     return el.hasAttribute('data-od-id') ? '[data-od-id="' + esc(id) + '"]' : '[data-screen-label="' + esc(id) + '"]';
   }
   function applyOverride(elementId, selector, prop, value){
-    if (!elementId || !selector || !prop) return;
+    if (!elementId || !prop) return;
+    if (!Object.prototype.hasOwnProperty.call(ALLOWED_PROPS, prop)) return;
+    var safeSelector = safeSelectorFor(elementId);
+    if (!safeSelector) return;
+    var v = (value == null) ? '' : String(value).trim();
+    if (v && UNSAFE_VALUE.test(v)) return;
     var entry = overrides[elementId];
     if (!entry) {
-      entry = { selector: selector, props: Object.create(null) };
+      entry = { selector: safeSelector, props: Object.create(null) };
       overrides[elementId] = entry;
     } else {
-      entry.selector = selector;
+      entry.selector = safeSelector;
     }
-    var v = (value == null) ? '' : String(value).trim();
     if (!v) delete entry.props[prop];
     else entry.props[prop] = v;
     if (Object.keys(entry.props).length === 0) delete overrides[elementId];
