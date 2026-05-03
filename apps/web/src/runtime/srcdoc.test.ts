@@ -131,8 +131,15 @@ describe('buildSrcdoc', () => {
 
     // Selector is recomputed from elementId, not echoed back from the
     // inbound message — defends against a forged selector breaking out
-    // of the override <style> block.
-    expect(srcdoc).toContain('function safeSelectorFor(elementId)');
-    expect(srcdoc).toContain('var safeSelector = safeSelectorFor(elementId)');
+    // of the override <style> block. The inbound selector is still
+    // inspected to pick the attribute kind (data-od-id vs
+    // data-screen-label) the user clicked, so an artifact that carries
+    // both attributes on different nodes with the same id tunes the
+    // node the host serializer keys off, not whichever attribute
+    // happens to come first in safeSelectorFor's fallback order.
+    expect(srcdoc).toContain('function safeSelectorFor(elementId, hint)');
+    expect(srcdoc).toContain('var safeSelector = safeSelectorFor(elementId, selector)');
+    expect(srcdoc).toContain("hint.indexOf('[data-od-id=') === 0");
+    expect(srcdoc).toContain("hint.indexOf('[data-screen-label=') === 0");
   });
 });

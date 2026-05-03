@@ -139,6 +139,27 @@ describe('applyInspectOverridesToSource', () => {
     expect(next).toContain('<style data-od-inspect-overrides>');
     expect(next.indexOf('<style data-od-inspect-overrides>')).toBeLessThan(next.indexOf('<main'));
   });
+
+  // Regression for nexu-io/open-design#362: if a source file has more than
+  // one inspect override block (manual edit, or an earlier buggy save), the
+  // splicer must drop them all before inserting the new block. A non-global
+  // regex would only strip the first, so save-then-reload could resurrect an
+  // override the user just cleared.
+  it('removes every existing overrides block, not just the first', () => {
+    const dup = `<!doctype html><html><head>` +
+      `<style data-od-inspect-overrides>[data-od-id="hero"] { color: #ff0000 !important }</style>` +
+      `<style data-od-inspect-overrides>[data-od-id="hero"] { color: #00ff00 !important }</style>` +
+      `<title>X</title></head><body><main data-od-id="hero">Hi</main></body></html>`;
+    const replaced = applyInspectOverridesToSource(dup, `[data-od-id="hero"] { color: #0000ff !important }`);
+    const matches = replaced.match(/<style data-od-inspect-overrides>/g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(replaced).toContain('color: #0000ff');
+    expect(replaced).not.toContain('color: #ff0000');
+    expect(replaced).not.toContain('color: #00ff00');
+
+    const cleared = applyInspectOverridesToSource(dup, '');
+    expect(cleared).not.toContain('data-od-inspect-overrides');
+  });
 });
 
 describe('serializeInspectOverrides', () => {

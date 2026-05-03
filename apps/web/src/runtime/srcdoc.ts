@@ -185,9 +185,23 @@ function injectSelectionBridge(
   // Recompute the selector from elementId rather than trusting the one in
   // the inbound message — a forged selector like
   // '} </style><script>...' would otherwise be concatenated into the
-  // override <style> sheet verbatim.
-  function safeSelectorFor(elementId){
+  // override <style> sheet verbatim. The hint string is only inspected to
+  // decide which attribute kind (data-od-id vs data-screen-label) was the
+  // user's pick at click time, so we tune the same node the host
+  // serializer keys off; the hint itself is never written into CSS.
+  function safeSelectorFor(elementId, hint){
     var id = String(elementId);
+    var kind = null;
+    if (typeof hint === 'string') {
+      if (hint.indexOf('[data-od-id=') === 0) kind = 'data-od-id';
+      else if (hint.indexOf('[data-screen-label=') === 0) kind = 'data-screen-label';
+    }
+    if (kind === 'data-screen-label' && document.querySelector('[data-screen-label="' + esc(id) + '"]')) {
+      return '[data-screen-label="' + esc(id) + '"]';
+    }
+    if (kind === 'data-od-id' && document.querySelector('[data-od-id="' + esc(id) + '"]')) {
+      return '[data-od-id="' + esc(id) + '"]';
+    }
     if (document.querySelector('[data-od-id="' + esc(id) + '"]')) {
       return '[data-od-id="' + esc(id) + '"]';
     }
@@ -349,7 +363,7 @@ function injectSelectionBridge(
   function applyOverride(elementId, selector, prop, value){
     if (!elementId || !prop) return;
     if (!Object.prototype.hasOwnProperty.call(ALLOWED_PROPS, prop)) return;
-    var safeSelector = safeSelectorFor(elementId);
+    var safeSelector = safeSelectorFor(elementId, selector);
     if (!safeSelector) return;
     var v = (value == null) ? '' : String(value).trim();
     if (v && UNSAFE_VALUE.test(v)) return;

@@ -592,7 +592,12 @@ export function serializeInspectOverrides(overrides: unknown): string {
 // browser. Pure string transform — no DOM, no parser dependency.
 export function applyInspectOverridesToSource(source: string, css: string): string {
   const trimmed = css.trim();
-  const styleRegex = /<style[^>]*data-od-inspect-overrides[^>]*>[\s\S]*?<\/style>\s*/i;
+  // Global flag so we strip every existing inspect override block, not just
+  // the first one. Without it, a source that ever accumulated duplicate
+  // <style data-od-inspect-overrides> blocks (manual edit, or an earlier
+  // buggy save) would leave stale rules behind on save and reload-after-save
+  // could re-apply an override the UI just cleared.
+  const styleRegex = /<style[^>]*data-od-inspect-overrides[^>]*>[\s\S]*?<\/style>\s*/gi;
   const stripped = source.replace(styleRegex, '');
   if (!trimmed) return stripped;
   const block = `<style data-od-inspect-overrides>\n${trimmed}\n</style>\n`;
