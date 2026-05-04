@@ -14,15 +14,17 @@
  *   { type: 'od:slide-state', active: number, count: number }
  * after every navigation so the host can render its own counter / dots.
  */
+export type SrcdocOptions = {
+  deck?: boolean;
+  baseHref?: string;
+  initialSlideIndex?: number;
+  commentBridge?: boolean;
+  inspectBridge?: boolean;
+};
+
 export function buildSrcdoc(
   html: string,
-  options: {
-    deck?: boolean;
-    baseHref?: string;
-    initialSlideIndex?: number;
-    commentBridge?: boolean;
-    inspectBridge?: boolean;
-  } = {}
+  options: SrcdocOptions = {}
 ): string {
   const head = html.trimStart().slice(0, 64).toLowerCase();
   const isFullDoc = head.startsWith("<!doctype") || head.startsWith("<html");
