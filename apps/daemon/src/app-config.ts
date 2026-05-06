@@ -21,6 +21,7 @@ export type AgentCliEnvPrefs = Record<string, Record<string, string>>;
 export interface OrbitConfigPrefs {
   enabled: boolean;
   time: string;
+  templateSkillId?: string | null;
 }
 
 export interface AppConfigPrefs {
@@ -114,7 +115,10 @@ function validateOrbit(raw: unknown): OrbitConfigPrefs | undefined {
   const time = typeof obj.time === 'string' && /^\d{2}:\d{2}$/.test(obj.time)
     ? obj.time
     : '08:00';
-  return { enabled, time };
+  const templateSkillId = typeof obj.templateSkillId === 'string' && obj.templateSkillId.trim()
+    ? obj.templateSkillId.trim()
+    : null;
+  return { enabled, time, templateSkillId };
 }
 
 export function agentCliEnvForAgent(

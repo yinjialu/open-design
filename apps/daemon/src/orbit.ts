@@ -62,6 +62,12 @@ export function formatLocalProjectTimestamp(iso: string): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
+export type OrbitTemplateResolver = (skillId: string) => Promise<{
+  id: string;
+  name: string;
+  examplePrompt: string;
+} | null>;
+
 export interface OrbitStatus {
   config: OrbitConfigPrefs;
   running: boolean;
@@ -72,6 +78,7 @@ export interface OrbitStatus {
 export const DEFAULT_ORBIT_CONFIG: OrbitConfigPrefs = {
   enabled: false,
   time: '08:00',
+  templateSkillId: null,
 };
 
 const SUMMARY_FILE = 'activity-summary.json';
@@ -83,6 +90,9 @@ function normalizeOrbitConfig(config: Partial<OrbitConfigPrefs> | undefined): Or
   return {
     enabled: Boolean(config?.enabled),
     time,
+    templateSkillId: typeof config?.templateSkillId === 'string' && config.templateSkillId.trim()
+      ? config.templateSkillId.trim()
+      : null,
   };
 }
 
@@ -146,10 +156,14 @@ function renderMarkdown(summary: Omit<OrbitActivitySummary, 'markdown'>): string
   return lines.join('\n').trimEnd();
 }
 
-export function buildOrbitPrompt(now = new Date()): string {
+export function buildOrbitPrompt(now = new Date(), template?: {
+  id: string;
+  name: string;
+  examplePrompt: string;
+} | null): string {
   const end = now.toISOString();
   const start = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
-  return [
+  const lines = [
     'Create a Live Artifact for Orbit: a concise, useful activity digest for the past 24 hours.',
     '',
     `Time window: ${start} through ${end}.`,
@@ -181,7 +195,20 @@ export function buildOrbitPrompt(now = new Date()): string {
     '- Notion: “Product Notes and Launch Checklist were the only matching pages; Launch Checklist changed around connector onboarding and should be reviewed before release.”',
     '',
     'Keep the artifact compact: a single responsive HTML view, no more than roughly 200 lines of template/CSS, and no lengthy design critique pass. If connector data is sparse, still create the Live Artifact and clearly say what was checked and what was missing. Do not invent activity. Keep the visual design polished but lightweight.',
-  ].join('\n');
+  ];
+  if (template) {
+    lines.push(
+      '',
+      'Selected Orbit example template:',
+      `- Skill id: ${template.id}`,
+      `- Skill name: ${template.name}`,
+      '',
+      `Invoke the ${template.id} Agent skill for this artifact's structure, visual language, and domain-specific synthesis rules. The selected template's example prompt is:`,
+      '',
+      template.examplePrompt.trim(),
+    );
+  }
+  return lines.join('\n');
 }
 
 export class OrbitService {
@@ -193,11 +220,16 @@ export class OrbitService {
   private inflightProjectId: string | null = null;
   private inflightAgentRunId: string | null = null;
   private runHandler: OrbitRunHandler | null = null;
+  private templateResolver: OrbitTemplateResolver | null = null;
 
   constructor(private readonly dataDir: string) {}
 
   setRunHandler(handler: OrbitRunHandler): void {
     this.runHandler = handler;
+  }
+
+  setTemplateResolver(resolver: OrbitTemplateResolver): void {
+    this.templateResolver = resolver;
   }
 
   configure(config: Partial<OrbitConfigPrefs> | undefined): void {
@@ -232,7 +264,10 @@ export class OrbitService {
 
     const startedAt = new Date().toISOString();
     const runId = `orbit-${randomUUID()}`;
-    const prompt = buildOrbitPrompt(new Date(startedAt));
+    const template = this.config.templateSkillId && this.templateResolver
+      ? await this.templateResolver(this.config.templateSkillId).catch(() => null)
+      : null;
+    const prompt = buildOrbitPrompt(new Date(startedAt), template);
     const handlerStart = await this.runHandler({ runId, trigger, startedAt, prompt });
 
     this.inflightProjectId = handlerStart.projectId;

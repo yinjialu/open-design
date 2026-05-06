@@ -45,6 +45,7 @@ export const DEFAULT_PET: PetConfig = {
 export const DEFAULT_ORBIT: OrbitConfig = {
   enabled: false,
   time: '08:00',
+  templateSkillId: null,
 };
 
 export const DEFAULT_CONFIG: AppConfig = {

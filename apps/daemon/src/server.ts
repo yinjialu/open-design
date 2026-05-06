@@ -4375,6 +4375,17 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     return { projectId, agentRunId: run.id, completion };
   });
 
+  orbitService.setTemplateResolver(async (skillId) => {
+    const skills = await listSkills(SKILLS_DIR);
+    const skill = findSkillById(skills, skillId);
+    if (!skill || skill.scenario !== 'orbit') return null;
+    return {
+      id: skill.id,
+      name: skill.name,
+      examplePrompt: skill.examplePrompt,
+    };
+  });
+
   app.post('/api/runs', (req, res) => {
     const run = design.runs.create(req.body || {});
     /** @type {import('@open-design/contracts').ChatRunCreateResponse} */

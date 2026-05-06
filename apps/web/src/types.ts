@@ -224,6 +224,8 @@ export interface OrbitConfig {
   enabled: boolean;
   /** Local 24-hour clock time in HH:mm format. */
   time: string;
+  /** Optional skill id from the examples gallery where scenario === "orbit". */
+  templateSkillId?: string | null;
 }
 
 export interface PetConfig {

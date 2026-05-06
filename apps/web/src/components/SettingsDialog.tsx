@@ -17,7 +17,8 @@ import {
   MIN_MAX_TOKENS,
   modelMaxTokensDefault,
 } from '../state/maxTokens';
-import type { AgentInfo, ApiProtocol, ApiProtocolConfig, AppConfig, AppTheme, AppVersionInfo, ExecMode } from '../types';
+import type { AgentInfo, ApiProtocol, ApiProtocolConfig, AppConfig, AppTheme, AppVersionInfo, ExecMode, SkillSummary } from '../types';
+import { fetchSkills } from '../providers/registry';
 import { MEDIA_PROVIDERS } from '../media/models';
 import type { MediaProvider } from '../media/models';
 import { PetSettings } from './pet/PetSettings';
@@ -1394,6 +1395,12 @@ function OrbitSection({
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Orbit-scenario skill templates fetched from /api/skills. We fetch on mount
+  // and keep three states for graceful UX: `null` = still loading, `[]` =
+  // loaded with no orbit templates available, `SkillSummary[]` = ready. If
+  // the daemon is offline the call resolves with [] (see fetchSkills) so the
+  // section never throws — the rest of the Orbit controls keep working.
+  const [orbitTemplates, setOrbitTemplates] = useState<SkillSummary[] | null>(null);
   // Once the user clicks Generate we close Settings and navigate away. The ref
   // lets late-arriving handlers no-op without React warnings.
   const isMountedRef = useRef(true);
@@ -1422,6 +1429,35 @@ function OrbitSection({
   useEffect(() => {
     void refreshStatus();
   }, []);
+
+  // Fetch the skills registry once on mount and filter to scenario === 'orbit'.
+  // We tolerate fetch failure: fetchSkills already swallows errors and returns
+  // []. The component then transitions from "loading" → "empty" and the rest
+  // of the Orbit panel stays fully functional.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const all = await fetchSkills();
+      if (!alive) return;
+      const filtered = all.filter((s) => s.scenario === 'orbit');
+      // Stable order: featured first (higher number = more featured), then by name.
+      filtered.sort((a, b) => {
+        const af = a.featured ?? 0;
+        const bf = b.featured ?? 0;
+        if (af !== bf) return bf - af;
+        return a.name.localeCompare(b.name);
+      });
+      setOrbitTemplates(filtered);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const selectedTemplate = useMemo(() => {
+    if (!orbit.templateSkillId || !orbitTemplates) return null;
+    return orbitTemplates.find((s) => s.id === orbit.templateSkillId) ?? null;
+  }, [orbit.templateSkillId, orbitTemplates]);
 
   const triggerNow = () => {
     if (running) return;
@@ -1606,7 +1642,159 @@ function OrbitSection({
         </div>
       </div>
 
-      {/* ---------- 3. RUN RESULT / RECEIPT ---------- */}
+      {/* ---------- 3. TEMPLATE CARD ---------- */}
+      {/* Lets the user pick which scenario === 'orbit' skill template gets
+          injected into the Orbit prompt. The card mirrors the Automation
+          card's visual language (border, panel bg, soft shadow) so the two
+          configuration cards read as a paired system. We render it
+          unconditionally — even while skills are loading or when none are
+          available — because the "Default / Auto" option is always a valid
+          choice and we want the layout rhythm to be stable. */}
+      <div
+        className={`orbit-template${selectedTemplate ? ' has-template' : ''}`}
+        aria-busy={orbitTemplates === null || undefined}
+      >
+        <div className="orbit-template-head">
+          <div className="orbit-template-head-copy">
+            <span className="orbit-template-eyebrow">
+              <Icon name="sparkles" size={11} />
+              <span>Prompt template</span>
+            </span>
+            <h4 className="orbit-template-title">Steer Orbit with a skill</h4>
+            <p className="orbit-template-sub">
+              The selected template's example prompt is injected into every
+              Orbit run, triggering the matching agent skill so summaries
+              follow that template's shape.
+            </p>
+          </div>
+        </div>
+
+        <div className="orbit-template-control">
+          <label className="orbit-template-select" htmlFor="orbit-template-select">
+            <span className="orbit-template-select-label">Template</span>
+            <div className="orbit-template-select-wrap">
+              <select
+                id="orbit-template-select"
+                className="orbit-template-select-input"
+                value={orbit.templateSkillId ?? ''}
+                disabled={orbitTemplates === null}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  updateOrbit({ templateSkillId: next === '' ? null : next });
+                }}
+              >
+                <option value="">
+                  {orbitTemplates === null
+                    ? 'Loading templates…'
+                    : 'Default — built-in Orbit prompt'}
+                </option>
+                {orbitTemplates && orbitTemplates.length > 0 ? (
+                  <optgroup label="Orbit skill templates">
+                    {orbitTemplates.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null}
+              </select>
+              <Icon
+                name="chevron-down"
+                size={12}
+                className="orbit-template-select-chevron"
+              />
+            </div>
+          </label>
+        </div>
+
+        {/* Live preview of the active template. Three states:
+            – loading skeleton (templates still fetching),
+            – empty hint (no orbit skills published yet, or daemon unreachable),
+            – named card (something is selected or default is in effect). */}
+        <div className="orbit-template-preview" aria-live="polite">
+          {orbitTemplates === null ? (
+            <div className="orbit-template-preview-skeleton" aria-hidden="true">
+              <span className="orbit-template-skeleton-line is-short" />
+              <span className="orbit-template-skeleton-line is-long" />
+            </div>
+          ) : selectedTemplate ? (
+            <div className="orbit-template-preview-card is-selected">
+              <div className="orbit-template-preview-mark" aria-hidden="true">
+                <Icon name="sparkles" size={14} />
+              </div>
+              <div className="orbit-template-preview-body">
+                <span className="orbit-template-preview-kicker">Active template</span>
+                <span className="orbit-template-preview-name">
+                  {selectedTemplate.name}
+                </span>
+                {selectedTemplate.description ? (
+                  <span className="orbit-template-preview-desc">
+                    {selectedTemplate.description}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="orbit-template-clear"
+                onClick={() => updateOrbit({ templateSkillId: null })}
+                title="Clear template and use the default Orbit prompt"
+              >
+                <Icon name="close" size={11} />
+                <span>Clear</span>
+              </button>
+            </div>
+          ) : orbit.templateSkillId ? (
+            // The config references a skill id we no longer see in the
+            // registry — surface it as a soft warning rather than silently
+            // dropping the selection.
+            <div className="orbit-template-preview-card is-missing">
+              <div className="orbit-template-preview-mark" aria-hidden="true">
+                <Icon name="history" size={14} />
+              </div>
+              <div className="orbit-template-preview-body">
+                <span className="orbit-template-preview-kicker">Template missing</span>
+                <span className="orbit-template-preview-name">
+                  {orbit.templateSkillId}
+                </span>
+                <span className="orbit-template-preview-desc">
+                  This skill isn't installed. Orbit will fall back to the
+                  default prompt until you pick another template.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="orbit-template-clear"
+                onClick={() => updateOrbit({ templateSkillId: null })}
+                title="Reset to default"
+              >
+                <Icon name="close" size={11} />
+                <span>Reset</span>
+              </button>
+            </div>
+          ) : (
+            <div className="orbit-template-preview-card is-default">
+              <div className="orbit-template-preview-mark" aria-hidden="true">
+                <Icon name="refresh" size={14} />
+              </div>
+              <div className="orbit-template-preview-body">
+                <span className="orbit-template-preview-kicker">
+                  Default behavior
+                </span>
+                <span className="orbit-template-preview-name">
+                  Built-in Orbit prompt
+                </span>
+                <span className="orbit-template-preview-desc">
+                  {orbitTemplates && orbitTemplates.length === 0
+                    ? 'No Orbit skill templates are installed yet — Orbit will use its built-in connector activity prompt.'
+                    : 'Pick a template above to inject its example prompt into the Orbit run.'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ---------- 4. RUN RESULT / RECEIPT ---------- */}
       {/* When there is no last run yet, the "receipt" metaphor doesn't fit —
           there's nothing to report. We swap to a first-run prompt with its
           own composed layout (orbit-glyph · copy · inline CTA) so the empty
@@ -1746,7 +1934,7 @@ function OrbitSection({
         </div>
       )}
 
-      {/* ---------- 4. LIVE ARTIFACT STRIP ---------- */}
+      {/* ---------- 5. LIVE ARTIFACT STRIP ---------- */}
       {lastRun ? (
         <div
           className={`orbit-artifact-strip${liveArtifactHref ? '' : ' is-legacy'}`}

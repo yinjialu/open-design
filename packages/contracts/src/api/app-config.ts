@@ -9,6 +9,8 @@ export interface OrbitConfigPrefs {
   enabled: boolean;
   /** Local 24-hour clock time in HH:mm format. Defaults to 08:00. */
   time: string;
+  /** Optional skill id from the examples gallery where scenario === "orbit". */
+  templateSkillId?: string | null;
 }
 
 export interface AppConfigPrefs {
