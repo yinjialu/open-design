@@ -311,24 +311,25 @@ export function FileWorkspace({
       if (ok) deleted.push(name);
       else failed.push(name);
     }
-    if (deleted.length === 0) return;
-    await onRefreshFiles();
-    const deletedSet = new Set(deleted);
-    const nextTabs = persistedTabs.filter((n) => !deletedSet.has(n));
-    if (activeTab && deletedSet.has(activeTab)) {
-      const nextActive = nextTabs[nextTabs.length - 1] ?? null;
-      onTabsStateChange({ tabs: nextTabs, active: nextActive });
-      setActiveTab(nextActive ?? DESIGN_FILES_TAB);
-    } else {
-      const nextActive =
-        tabsState.active && deletedSet.has(tabsState.active) ? null : tabsState.active;
-      onTabsStateChange({ tabs: nextTabs, active: nextActive });
+    if (deleted.length > 0) {
+      await onRefreshFiles();
+      const deletedSet = new Set(deleted);
+      const nextTabs = persistedTabs.filter((n) => !deletedSet.has(n));
+      if (activeTab && deletedSet.has(activeTab)) {
+        const nextActive = nextTabs[nextTabs.length - 1] ?? null;
+        onTabsStateChange({ tabs: nextTabs, active: nextActive });
+        setActiveTab(nextActive ?? DESIGN_FILES_TAB);
+      } else {
+        const nextActive =
+          tabsState.active && deletedSet.has(tabsState.active) ? null : tabsState.active;
+        onTabsStateChange({ tabs: nextTabs, active: nextActive });
+      }
+      setSketches((curr) => {
+        const next = { ...curr };
+        for (const name of deleted) delete next[name];
+        return next;
+      });
     }
-    setSketches((curr) => {
-      const next = { ...curr };
-      for (const name of deleted) delete next[name];
-      return next;
-    });
     if (failed.length > 0) {
       alert(t('workspace.deleteSelectedFilesPartial', { n: failed.length }));
     }
@@ -516,7 +517,7 @@ export function FileWorkspace({
             onOpenFile={openFile}
             onOpenLiveArtifact={(tabId) => openFile(tabId)}
             onDeleteFile={(name) => void handleDelete(name)}
-            onDeleteFiles={(names) => void handleDeleteMany(names)}
+            onDeleteFiles={handleDeleteMany}
             onUpload={() => fileInputRef.current?.click()}
             onUploadFiles={(picked) => void uploadFiles(picked)}
             onPaste={() => setShowPasteDialog(true)}

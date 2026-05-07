@@ -16,7 +16,7 @@ interface Props {
   onOpenFile: (name: string) => void;
   onOpenLiveArtifact: (tabId: LiveArtifactWorkspaceEntry['tabId']) => void;
   onDeleteFile: (name: string) => void;
-  onDeleteFiles: (names: string[]) => void;
+  onDeleteFiles: (names: string[]) => Promise<void> | void;
   onUpload: () => void;
   onUploadFiles: (files: File[]) => void;
   onPaste: () => void;
@@ -69,6 +69,7 @@ export function DesignFilesPanel({
   const [sectionLimits, setSectionLimits] = useState<Partial<Record<Section, number>>>({});
   const [isSectionExpansionPending, startSectionExpansion] = useTransition();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const grouped = useMemo(() => {
     const groups: Record<Section, ProjectFile[]> = {
@@ -162,11 +163,20 @@ export function DesignFilesPanel({
     });
   }
 
-  function handleBatchDelete() {
+  async function handleBatchDelete() {
+    if (deleting) return;
     const fileList = [...selected];
     if (fileList.length === 0) return;
-    onDeleteFiles(fileList);
-    setSelected(new Set());
+    setDeleting(true);
+    try {
+      await onDeleteFiles(fileList);
+      // Don't clear `selected` here: confirm-cancel and all-fail paths
+      // should leave the user's selection intact for retry. The
+      // `useEffect` above prunes successfully-deleted names automatically
+      // once `files` refreshes.
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleBatchDownload() {
@@ -252,7 +262,8 @@ export function DesignFilesPanel({
                 type="button"
                 className="danger"
                 data-testid="design-files-batch-delete"
-                onClick={handleBatchDelete}
+                disabled={deleting}
+                onClick={() => void handleBatchDelete()}
                 title={t('designFiles.deleteSelected', { n: selected.size })}
               >
                 <span>{t('designFiles.deleteSelected', { n: selected.size })}</span>
