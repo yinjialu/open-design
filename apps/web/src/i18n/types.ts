@@ -582,6 +582,8 @@ export interface Dict {
   'workspace.showChat': string;
   'workspace.closeTab': string;
   'workspace.deleteFileConfirm': string;
+  'workspace.deleteSelectedFilesConfirm': string;
+  'workspace.deleteSelectedFilesPartial': string;
   'workspace.openFromDesignFiles': string;
   'workspace.designFilesLink': string;
   'workspace.loadingSketch': string;
@@ -600,6 +602,7 @@ export interface Dict {
   'designFiles.openInTab': string;
   'designFiles.download': string;
   'designFiles.downloadSelected': string;
+  'designFiles.deleteSelected': string;
   'designFiles.clearSelection': string;
   'designFiles.selectAll': string;
   'designFiles.dropTitle': string;

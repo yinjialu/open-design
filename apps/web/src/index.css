@@ -4726,6 +4726,8 @@ button.connector-action.is-loading {
   gap: 6px;
 }
 .df-head .df-actions button:hover:not(:disabled) { background: var(--bg-subtle); color: var(--text); }
+.df-head .df-actions button.danger { color: var(--red); }
+.df-head .df-actions button.danger:hover:not(:disabled) { background: var(--red-bg); color: var(--red); }
 
 .df-body {
   flex: 1;

@@ -16,6 +16,7 @@ interface Props {
   onOpenFile: (name: string) => void;
   onOpenLiveArtifact: (tabId: LiveArtifactWorkspaceEntry['tabId']) => void;
   onDeleteFile: (name: string) => void;
+  onDeleteFiles: (names: string[]) => void;
   onUpload: () => void;
   onUploadFiles: (files: File[]) => void;
   onPaste: () => void;
@@ -50,6 +51,7 @@ export function DesignFilesPanel({
   onOpenFile,
   onOpenLiveArtifact,
   onDeleteFile,
+  onDeleteFiles,
   onUpload,
   onUploadFiles,
   onPaste,
@@ -160,6 +162,13 @@ export function DesignFilesPanel({
     });
   }
 
+  function handleBatchDelete() {
+    const fileList = [...selected];
+    if (fileList.length === 0) return;
+    onDeleteFiles(fileList);
+    setSelected(new Set());
+  }
+
   async function handleBatchDownload() {
     const fileList = [...selected];
     if (fileList.length === 0) return;
@@ -238,6 +247,15 @@ export function DesignFilesPanel({
               >
                 <Icon name="download" size={13} />
                 <span>{t('designFiles.downloadSelected', { n: selected.size })}</span>
+              </button>
+              <button
+                type="button"
+                className="danger"
+                data-testid="design-files-batch-delete"
+                onClick={handleBatchDelete}
+                title={t('designFiles.deleteSelected', { n: selected.size })}
+              >
+                <span>{t('designFiles.deleteSelected', { n: selected.size })}</span>
               </button>
             </div>
           ) : (
